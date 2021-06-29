@@ -21,9 +21,9 @@ ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase + "!?
 NUM_CLASSES = len(ALPHABET) + 1  # + 1 for CTC blank-symbol (separator between characters)
 SEPARATOR_SYMBOL = len(ALPHABET)
 
-BATCH_SIZE = 32
-EPOCHS = 2
-SPLIT_FACTOR = 0.001
+BATCH_SIZE = 64
+EPOCHS = 5
+SPLIT_FACTOR = 0.1
 
 
 def main():
@@ -96,6 +96,7 @@ def ctc_loss(args):
 def train(images, split_index, descriptions):
     print(f"Number of loaded images: {len(images)}")
     training_images = images[:split_index]
+    print(f"Training set size: {len(training_images)}")
     training_labels = [descriptions[os.path.splitext(os.path.basename(image))[0]][3] for image in training_images]
 
     for i in range(len(training_images)):
@@ -113,7 +114,7 @@ def train(images, split_index, descriptions):
     print(len(training_labels_lengths))
     print(training_labels_lengths[0])
 
-    model = train_model(training_images, training_labels, training_pred_lengths, training_labels_lengths)
+    model = train_model(np.asarray(training_images), np.asarray(training_labels), training_pred_lengths, training_labels_lengths)
     return model
 
 
@@ -139,11 +140,21 @@ def text_to_label(text, word_width, width_padding_index):
     return np.asarray(label).astype('int64')
 
 
+def bad_text_to_label(text):
+    label = np.ones([MAX_STRING_LENGTH])
+    label *= SEPARATOR_SYMBOL
+
+    for i, c in enumerate(text):
+        label[i] = ALPHABET.index(c)
+
+    return np.asarray(label).astype('int64')
+
+
 def load_images_and_create_labels(image_path, label):
     image = Image.open(image_path)
     image.thumbnail(TARGET_SIZE)
     image_array = np.asarray(image)
-    print(image_array.shape)
+    #print(image_array.shape)
     image_array = image_array / 255.0
     image_width = len(image_array[0])
     image_height = len(image_array)
@@ -157,11 +168,11 @@ def load_images_and_create_labels(image_path, label):
 
     image_array = np.pad(image_array, (height_padding, width_padding), mode="constant", constant_values=(1.0, 1.0))
     image_array = image_array.T
-    print(image_array.shape)
+    #print(image_array.shape)
 
     # print(sys.getsizeof(image_array.astype('float32')))
 
-    return image_array.astype('float32'), text_to_label(label, image_width, width_padding_index)
+    return image_array.astype('float32'), bad_text_to_label(label)  # , image_width, width_padding_index)
 
 
 def load_image_names():
