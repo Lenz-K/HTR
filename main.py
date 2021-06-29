@@ -19,6 +19,7 @@ TARGET_SIZE = (TARGET_WIDTH, TARGET_HEIGHT)
 MAX_STRING_LENGTH = 256
 ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase + "!?.,;:-'\"%$&/()=*#+|"
 NUM_CLASSES = len(ALPHABET) + 1  # + 1 for CTC blank-symbol (separator between characters)
+SEPARATOR_SYMBOL = len(ALPHABET)
 
 BATCH_SIZE = 32
 EPOCHS = 2
@@ -33,42 +34,6 @@ def main():
     split_index = int(len(images) * SPLIT_FACTOR)
 
     train(images, split_index, descriptions)
-    # test(images, split_index, descriptions, model)
-
-
-def test(images, split_index, descriptions, model):
-    test_images = images[split_index:]
-    test_labels = [descriptions[os.path.splitext(os.path.basename(image))[0]][3] for image in test_images]
-    test_labels = np.array([np.array([ALPHABET.index(c) for _, c in enumerate(label)]) for label in test_labels])
-    test_images = np.array([load_image(image) for image in test_images])
-
-
-def train(images, split_index, descriptions):
-    #print(len(images))
-    training_images = images[:split_index]
-    training_labels = [descriptions[os.path.splitext(os.path.basename(image))[0]][3] for image in training_images]
-    training_labels = np.asarray([text_to_label(label) for label in training_labels])
-    training_labels_lengths = np.asarray([np.asarray([len(label)]).astype('int64') for label in training_labels])
-
-    training_images = np.asarray([load_image(image) for image in training_images])
-
-    training_pred_lengths = np.asarray([np.asarray([MAX_STRING_LENGTH]).astype('int64') for _ in training_labels])
-    print(training_images[0])
-    print(training_labels[0])
-    print(training_pred_lengths[0])
-    print(training_labels_lengths[0])
-
-    model = train_model(training_images, training_labels, training_pred_lengths, training_labels_lengths)
-    return model
-
-
-def text_to_label(text):
-    label = np.ones([MAX_STRING_LENGTH])
-    label *= len(ALPHABET)
-    for i, c in enumerate(text):
-        label[i] = ALPHABET.index(c)
-
-    return np.asarray(label).astype('int64')
 
 
 def train_model(training_images, training_labels, training_pred_lengths, training_labels_lengths):
@@ -128,14 +93,63 @@ def ctc_loss(args):
     return loss
 
 
-def load_image(path):
-    image = Image.open(path)
+def train(images, split_index, descriptions):
+    print(f"Number of loaded images: {len(images)}")
+    training_images = images[:split_index]
+    training_labels = [descriptions[os.path.splitext(os.path.basename(image))[0]][3] for image in training_images]
+
+    for i in range(len(training_images)):
+        training_images[i], training_labels[i] = load_images_and_create_labels(training_images[i], training_labels[i])
+
+    training_labels_lengths = np.asarray([np.asarray([len(label)]).astype('int64') for label in training_labels])
+    training_pred_lengths = np.asarray([np.asarray([MAX_STRING_LENGTH]).astype('int64') for _ in training_labels])
+
+    print(len(training_images))
+    print(training_images[0])
+    print(len(training_labels))
+    print(training_labels[0])
+    print(len(training_pred_lengths))
+    print(training_pred_lengths[0])
+    print(len(training_labels_lengths))
+    print(training_labels_lengths[0])
+
+    model = train_model(training_images, training_labels, training_pred_lengths, training_labels_lengths)
+    return model
+
+
+def text_to_label(text, word_width, width_padding_index):
+    begin = width_padding_index // 4
+    word_width = word_width // 4
+    step_width = max(word_width // len(text), 1)
+
+    label = np.ones([MAX_STRING_LENGTH])
+    label *= SEPARATOR_SYMBOL
+
+    print(f"Begin: {begin} available steps: {word_width} number of chars: {len(text)} step width: {step_width}")
+
+    j = begin
+    for i, c in enumerate(text):
+        space_for_c = (step_width + 1) // 2
+        space_for_separator = step_width // 2
+        for _ in range(space_for_c):
+            label[j] = ALPHABET.index(c)
+            j += 1
+        j += space_for_separator
+
+    return np.asarray(label).astype('int64')
+
+
+def load_images_and_create_labels(image_path, label):
+    image = Image.open(image_path)
     image.thumbnail(TARGET_SIZE)
     image_array = np.asarray(image)
+    print(image_array.shape)
     image_array = image_array / 255.0
+    image_width = len(image_array[0])
+    image_height = len(image_array)
 
-    padding_width = TARGET_WIDTH - len(image_array[0])
-    padding_height = TARGET_HEIGHT - len(image_array)
+    padding_width = TARGET_WIDTH - image_width
+    padding_height = TARGET_HEIGHT - image_height
     width_padding_index = random.randint(0, padding_width)
     height_padding_index = random.randint(0, padding_height)
     height_padding = (height_padding_index, padding_height - height_padding_index)
@@ -143,10 +157,11 @@ def load_image(path):
 
     image_array = np.pad(image_array, (height_padding, width_padding), mode="constant", constant_values=(1.0, 1.0))
     image_array = image_array.T
+    print(image_array.shape)
 
-    #print(sys.getsizeof(image_array.astype('float32')))
+    # print(sys.getsizeof(image_array.astype('float32')))
 
-    return image_array.astype('float32')
+    return image_array.astype('float32'), text_to_label(label, image_width, width_padding_index)
 
 
 def load_image_names():
@@ -160,7 +175,7 @@ def add_all_pngs(images, directory):
     files = os.listdir(directory)
     for file in files:
         filepath = os.path.join(directory, file)
-        if os.path.isdir(filepath) and "sentences" not in filepath:
+        if os.path.isdir(filepath):
             add_all_pngs(images, filepath)
         elif os.path.isfile(filepath) and filepath.endswith(".png"):
             images.append(filepath)
@@ -172,9 +187,6 @@ def load_descriptions():
 
     with open(os.path.join(directory, "lines.txt")) as file:
         extract_fields(descriptions, file, extract_lines_fields)
-
-    # with open(os.path.join(directory, "sentences.txt")) as file:
-    # extract_fields(descriptions, file, extract_sentences_fields)
 
     with open(os.path.join(directory, "words.txt")) as file:
         extract_fields(descriptions, file, extract_words_fields)
@@ -201,12 +213,6 @@ def extract_words_fields(descriptions, line):
     fields = line.split(maxsplit=8)
     label = fields[-1][:-1].replace(" ", "|")
     descriptions[fields[0]] = [fields[1], fields[-4], fields[-3], label]
-
-
-def extract_sentences_fields(descriptions, line):
-    fields = line.split(maxsplit=9)
-    label = fields[-1][:-1].replace(" ", "|")
-    descriptions[fields[0]] = [fields[2], fields[-3], fields[-2], label]
 
 
 if __name__ == '__main__':
