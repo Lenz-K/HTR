@@ -16,30 +16,92 @@ TARGET_WIDTH = 1024
 TARGET_HEIGHT = 32
 TARGET_SIZE = (TARGET_WIDTH, TARGET_HEIGHT)
 
-MAX_STRING_LENGTH = 256
-ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase + "!?.,;:-'\"%$&/()=*#+|"
+MAX_STRING_LENGTH = 128
+ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase + "!?.,;:-'\"&/()*#+|"
 NUM_CLASSES = len(ALPHABET) + 1  # + 1 for CTC blank-symbol (separator between characters)
 SEPARATOR_SYMBOL = len(ALPHABET)
 
 BATCH_SIZE = 64
-EPOCHS = 5
-SPLIT_FACTOR = 0.1
+EPOCHS = 3
+SPLIT_FACTOR = 0.3
 
 
 def main():
     # filename: [ok, width, height, label]
     descriptions = load_descriptions()
     images = load_image_names()
+    print(f"Number of loaded images: {len(images)}")
     np.random.shuffle(images)
     split_index = int(len(images) * SPLIT_FACTOR)
 
-    train(images, split_index, descriptions)
+    model, input_data, y_pred = train_model(images, split_index, descriptions)
+
+    test_images, test_labels, test_pred_lengths, test_labels_lengths = get_datasets(images[len(images) - split_index:],
+                                                                                    descriptions)
+    #test_images, test_labels, test_pred_lengths, test_labels_lengths = get_datasets(images[split_index:], descriptions)
+    print(f"Test set size: {len(test_images)}")
+    test_loss = model.evaluate([test_images, test_labels, test_pred_lengths, test_labels_lengths],
+                               np.zeros([len(test_images)]))
+    # print(f"Loss: {test_loss}")
+
+    model_p = keras.models.Model(inputs=input_data, outputs=y_pred)
+
+    image = load_image(ROOT_DIR + "/images/lines/d07/d07-093/d07-093-03.png")
+    print(image.shape)
+    predict_image(model_p, image)
+    image = load_image(ROOT_DIR + "/images/words/f02/f02-033/f02-033-00-07.png")
+    print(image.shape)
+    predict_image(model_p, image)
+
+    converter = tf.lite.TFLiteConverter.from_keras_model(model_p)
+    tflite_float_model = converter.convert()
+
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    tflite_quantized_model = converter.convert()
+
+    with open("htr_float_model.tflite", "wb") as f:
+        f.write(tflite_float_model)
+    with open("htr_small_model.tflite", "wb") as f:
+        f.write(tflite_quantized_model)
 
 
-def train_model(training_images, training_labels, training_pred_lengths, training_labels_lengths):
+def train_model(images, split_index, descriptions):
+    training_images, training_labels, training_pred_lengths, training_labels_lengths = get_datasets(
+        images[:split_index], descriptions)
+    print(f"Training set size: {len(training_images)}")
+
+    model, input_data, y_pred = create_model()
+
+    # Train the digit classification model
+    model.fit([training_images, training_labels, training_pred_lengths, training_labels_lengths],
+              np.zeros([len(training_images)]), batch_size=BATCH_SIZE, epochs=EPOCHS)
+
+    training_images, training_labels, training_pred_lengths, training_labels_lengths = (0, 0, 0, 0)
+    print(training_images)
+    print(training_labels)
+    print(training_pred_lengths)
+    print(training_labels_lengths)
+
+    return model, input_data, y_pred
+
+
+def get_datasets(images, descriptions):
+    labels = [descriptions[os.path.splitext(os.path.basename(image))[0]][3] for image in images]
+
+    for i in range(len(images)):
+        images[i] = load_image(images[i])
+        labels[i] = text_to_label(labels[i])
+
+    labels_lengths = np.asarray([np.asarray([len(label)]).astype('int64') for label in labels])
+    pred_lengths = np.asarray([np.asarray([MAX_STRING_LENGTH]).astype('int64') for _ in labels])
+
+    return np.asarray(images), np.asarray(labels), pred_lengths, labels_lengths
+
+
+def create_model():
     kernel = (3, 3)
 
-    input_data = layers.Input(name='the_input', shape=(TARGET_WIDTH, TARGET_HEIGHT, 1), dtype='float32')
+    input_data = layers.Input(name='the_input', shape=(TARGET_WIDTH, TARGET_HEIGHT), dtype='float32')
     # shape(batchsize, MAX_STRING_LENGTH)
     labels = layers.Input(name='the_labels', shape=[MAX_STRING_LENGTH], dtype='int64')
     # shape(batchsize, 1) eg. [[timesteps], [timesteps]]
@@ -47,13 +109,15 @@ def train_model(training_images, training_labels, training_pred_lengths, trainin
     # shape(batchsize, 1) eg. [[3], [4]] for words "aaa" and "aaaa"
     label_length = layers.Input(name='label_length', shape=[1], dtype='int64')
 
-    inner = layers.Conv2D(name='conv1', filters=16, kernel_size=kernel, activation=tf.nn.relu, padding='same')(
-        input_data)
+    inner = layers.Reshape(name='reshape0', target_shape=(TARGET_WIDTH, TARGET_HEIGHT, 1))(input_data)
+    inner = layers.Conv2D(name='conv1', filters=16, kernel_size=kernel, activation=tf.nn.relu, padding='same')(inner)
     inner = layers.MaxPooling2D(name='max_pool1', pool_size=(2, 2))(inner)
     inner = layers.Conv2D(name='conv2', filters=16, kernel_size=kernel, activation=tf.nn.relu, padding='same')(inner)
     inner = layers.MaxPooling2D(name='max_pool2', pool_size=(2, 2))(inner)
-    inner = layers.Reshape(name='reshape1', target_shape=(256, 128))(inner)
-    inner = layers.Dense(256, name='dense1', activation=tf.nn.relu)(inner)
+    inner = layers.Conv2D(name='conv3', filters=16, kernel_size=kernel, activation=tf.nn.relu, padding='same')(inner)
+    inner = layers.MaxPooling2D(name='max_pool3', pool_size=(2, 2))(inner)
+    inner = layers.Reshape(name='reshape1', target_shape=(MAX_STRING_LENGTH, 64))(inner)
+    inner = layers.Dense(MAX_STRING_LENGTH, name='dense1', activation=tf.nn.relu)(inner)
     inner = layers.Bidirectional(layers.GRU(512, return_sequences=True), name='bidir1')(inner)
     inner = layers.Bidirectional(layers.GRU(512, return_sequences=True), name='bidir2')(inner)
     inner = layers.Dense(NUM_CLASSES, name='dense2')(inner)
@@ -76,71 +140,31 @@ def train_model(training_images, training_labels, training_pred_lengths, trainin
 
     model.summary()
 
-    # Train the digit classification model
-    model.fit([training_images, training_labels, training_pred_lengths, training_labels_lengths],
-              np.zeros([len(training_images)]), batch_size=BATCH_SIZE, epochs=EPOCHS)
-    return model
+    return model, input_data, y_pred
 
 
-def ctc_decode(prediction, input_length):
-    return K.get_value(K.ctc_decode(prediction, input_length))
+def predict_image(model, image):
+    image = np.expand_dims(image, axis=0)
+    prediction = model.predict(image)
+    decoded = ctc_decode(prediction)
+    print(f"Predicted decoded: {decoded}")
+    text = label_to_text(decoded)
+    print(f"Predicted text: {text}")
+    return text
+
+
+def ctc_decode(prediction):
+    print(f"Predicted shape: {prediction.shape}")
+    return K.get_value(K.ctc_decode(prediction, np.ones(prediction.shape[0]) * prediction.shape[1])[0][0])[0]
 
 
 def ctc_loss(args):
     prediction, labels, prediction_length, label_length = args
     loss = K.ctc_batch_cost(labels, prediction, prediction_length, label_length)
-    print(loss)
     return loss
 
 
-def train(images, split_index, descriptions):
-    print(f"Number of loaded images: {len(images)}")
-    training_images = images[:split_index]
-    print(f"Training set size: {len(training_images)}")
-    training_labels = [descriptions[os.path.splitext(os.path.basename(image))[0]][3] for image in training_images]
-
-    for i in range(len(training_images)):
-        training_images[i], training_labels[i] = load_images_and_create_labels(training_images[i], training_labels[i])
-
-    training_labels_lengths = np.asarray([np.asarray([len(label)]).astype('int64') for label in training_labels])
-    training_pred_lengths = np.asarray([np.asarray([MAX_STRING_LENGTH]).astype('int64') for _ in training_labels])
-
-    print(len(training_images))
-    print(training_images[0])
-    print(len(training_labels))
-    print(training_labels[0])
-    print(len(training_pred_lengths))
-    print(training_pred_lengths[0])
-    print(len(training_labels_lengths))
-    print(training_labels_lengths[0])
-
-    model = train_model(np.asarray(training_images), np.asarray(training_labels), training_pred_lengths, training_labels_lengths)
-    return model
-
-
-def text_to_label(text, word_width, width_padding_index):
-    begin = width_padding_index // 4
-    word_width = word_width // 4
-    step_width = max(word_width // len(text), 1)
-
-    label = np.ones([MAX_STRING_LENGTH])
-    label *= SEPARATOR_SYMBOL
-
-    print(f"Begin: {begin} available steps: {word_width} number of chars: {len(text)} step width: {step_width}")
-
-    j = begin
-    for i, c in enumerate(text):
-        space_for_c = (step_width + 1) // 2
-        space_for_separator = step_width // 2
-        for _ in range(space_for_c):
-            label[j] = ALPHABET.index(c)
-            j += 1
-        j += space_for_separator
-
-    return np.asarray(label).astype('int64')
-
-
-def bad_text_to_label(text):
+def text_to_label(text):
     label = np.ones([MAX_STRING_LENGTH])
     label *= SEPARATOR_SYMBOL
 
@@ -150,11 +174,20 @@ def bad_text_to_label(text):
     return np.asarray(label).astype('int64')
 
 
-def load_images_and_create_labels(image_path, label):
+def label_to_text(label):
+    text = ""
+    for c in label:
+        if c != SEPARATOR_SYMBOL and c != -1:
+            text += ALPHABET[c]
+
+    return text
+
+
+def load_image(image_path):
     image = Image.open(image_path)
     image.thumbnail(TARGET_SIZE)
     image_array = np.asarray(image)
-    #print(image_array.shape)
+    # print(image_array.shape)
     image_array = image_array / 255.0
     image_width = len(image_array[0])
     image_height = len(image_array)
@@ -168,11 +201,11 @@ def load_images_and_create_labels(image_path, label):
 
     image_array = np.pad(image_array, (height_padding, width_padding), mode="constant", constant_values=(1.0, 1.0))
     image_array = image_array.T
-    #print(image_array.shape)
+    # print(image_array.shape)
 
     # print(sys.getsizeof(image_array.astype('float32')))
 
-    return image_array.astype('float32'), bad_text_to_label(label)  # , image_width, width_padding_index)
+    return image_array.astype('float32')
 
 
 def load_image_names():
