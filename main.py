@@ -1,18 +1,18 @@
 import os
 import random
 import string
-import sys
 
 import numpy as np
 import tensorflow as tf
 from PIL import Image
 from keras import backend as K
+from matplotlib import pyplot
 from tensorflow import keras
 from tensorflow.keras import layers
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-TARGET_WIDTH = 1024
+TARGET_WIDTH = 512
 TARGET_HEIGHT = 32
 TARGET_SIZE = (TARGET_WIDTH, TARGET_HEIGHT)
 
@@ -23,7 +23,7 @@ SEPARATOR_SYMBOL = len(ALPHABET)
 
 BATCH_SIZE = 64
 EPOCHS = 3
-SPLIT_FACTOR = 0.3
+SPLIT_FACTOR = 0.1
 
 
 def main():
@@ -38,7 +38,7 @@ def main():
 
     test_images, test_labels, test_pred_lengths, test_labels_lengths = get_datasets(images[len(images) - split_index:],
                                                                                     descriptions)
-    #test_images, test_labels, test_pred_lengths, test_labels_lengths = get_datasets(images[split_index:], descriptions)
+    # test_images, test_labels, test_pred_lengths, test_labels_lengths = get_datasets(images[split_index:], descriptions)
     print(f"Test set size: {len(test_images)}")
     test_loss = model.evaluate([test_images, test_labels, test_pred_lengths, test_labels_lengths],
                                np.zeros([len(test_images)]))
@@ -52,23 +52,32 @@ def main():
     image = load_image(ROOT_DIR + "/images/words/f02/f02-033/f02-033-00-07.png")
     print(image.shape)
     predict_image(model_p, image)
-
-    converter = tf.lite.TFLiteConverter.from_keras_model(model_p)
-    tflite_float_model = converter.convert()
-
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    tflite_quantized_model = converter.convert()
-
-    with open("htr_float_model.tflite", "wb") as f:
-        f.write(tflite_float_model)
-    with open("htr_small_model.tflite", "wb") as f:
-        f.write(tflite_quantized_model)
+    #
+    # converter = tf.lite.TFLiteConverter.from_keras_model(model_p)
+    # tflite_float_model = converter.convert()
+    #
+    # converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    # tflite_quantized_model = converter.convert()
+    #
+    # with open("htr_float_model.tflite", "wb") as f:
+    #     f.write(tflite_float_model)
+    # with open("htr_small_model.tflite", "wb") as f:
+    #     f.write(tflite_quantized_model)
 
 
 def train_model(images, split_index, descriptions):
     training_images, training_labels, training_pred_lengths, training_labels_lengths = get_datasets(
         images[:split_index], descriptions)
     print(f"Training set size: {len(training_images)}")
+    print(training_images[0])
+    print(training_images[0].shape)
+    print(training_labels[0])
+    print(training_pred_lengths[0])
+    print(training_labels_lengths[0])
+
+    pyplot.figure(figsize=(5, 5))
+    pyplot.imshow(training_images[0])
+    pyplot.show()
 
     model, input_data, y_pred = create_model()
 
@@ -115,11 +124,13 @@ def create_model():
     inner = layers.Conv2D(name='conv2', filters=16, kernel_size=kernel, activation=tf.nn.relu, padding='same')(inner)
     inner = layers.MaxPooling2D(name='max_pool2', pool_size=(2, 2))(inner)
     inner = layers.Conv2D(name='conv3', filters=16, kernel_size=kernel, activation=tf.nn.relu, padding='same')(inner)
-    inner = layers.MaxPooling2D(name='max_pool3', pool_size=(2, 2))(inner)
-    inner = layers.Reshape(name='reshape1', target_shape=(MAX_STRING_LENGTH, 64))(inner)
+    inner = layers.MaxPooling2D(name='max_pool3', pool_size=(1, 2))(inner)
+    inner = layers.Conv2D(name='conv4', filters=16, kernel_size=kernel, activation=tf.nn.relu, padding='same')(inner)
+    inner = layers.MaxPooling2D(name='max_pool4', pool_size=(1, 2))(inner)
+    inner = layers.Reshape(name='reshape1', target_shape=(MAX_STRING_LENGTH, 32))(inner)
     inner = layers.Dense(MAX_STRING_LENGTH, name='dense1', activation=tf.nn.relu)(inner)
-    inner = layers.Bidirectional(layers.GRU(512, return_sequences=True), name='bidir1')(inner)
-    inner = layers.Bidirectional(layers.GRU(512, return_sequences=True), name='bidir2')(inner)
+    inner = layers.Bidirectional(layers.LSTM(512, return_sequences=True), name='bidir1')(inner)
+    inner = layers.Bidirectional(layers.LSTM(512, return_sequences=True), name='bidir2')(inner)
     inner = layers.Dense(NUM_CLASSES, name='dense2')(inner)
     y_pred = layers.Activation('softmax', name='softmax')(inner)  # shape(batchsize, timesteps, NUM_CLASSES)
 
@@ -168,10 +179,12 @@ def text_to_label(text):
     label = np.ones([MAX_STRING_LENGTH])
     label *= SEPARATOR_SYMBOL
 
+    # label = np.ones([len(text)])
+
     for i, c in enumerate(text):
         label[i] = ALPHABET.index(c)
 
-    return np.asarray(label).astype('int64')
+    return label.astype('int64')
 
 
 def label_to_text(label):
@@ -194,13 +207,14 @@ def load_image(image_path):
 
     padding_width = TARGET_WIDTH - image_width
     padding_height = TARGET_HEIGHT - image_height
-    width_padding_index = random.randint(0, padding_width)
+    width_padding_index = 0
     height_padding_index = random.randint(0, padding_height)
     height_padding = (height_padding_index, padding_height - height_padding_index)
     width_padding = (width_padding_index, padding_width - width_padding_index)
 
     image_array = np.pad(image_array, (height_padding, width_padding), mode="constant", constant_values=(1.0, 1.0))
     image_array = image_array.T
+    #image_array -= 0.5
     # print(image_array.shape)
 
     # print(sys.getsizeof(image_array.astype('float32')))
@@ -219,7 +233,7 @@ def add_all_pngs(images, directory):
     files = os.listdir(directory)
     for file in files:
         filepath = os.path.join(directory, file)
-        if os.path.isdir(filepath):
+        if os.path.isdir(filepath) and "words" not in filepath:
             add_all_pngs(images, filepath)
         elif os.path.isfile(filepath) and filepath.endswith(".png"):
             images.append(filepath)
@@ -232,8 +246,8 @@ def load_descriptions():
     with open(os.path.join(directory, "lines.txt")) as file:
         extract_fields(descriptions, file, extract_lines_fields)
 
-    with open(os.path.join(directory, "words.txt")) as file:
-        extract_fields(descriptions, file, extract_words_fields)
+    # with open(os.path.join(directory, "words.txt")) as file:
+    #   extract_fields(descriptions, file, extract_words_fields)
 
     return descriptions
 
