@@ -21,8 +21,8 @@ NUM_CLASSES = len(ALPHABET) + 1  # + 1 for blank-symbol
 SEPARATOR_SYMBOL = len(ALPHABET)
 
 BATCH_SIZE = 64
-EPOCHS = 60
-SPLIT_FACTOR = 0.99
+EPOCHS = 25  # TODO
+SPLIT_FACTOR = 0.99  # TODO
 
 
 def main():
@@ -35,8 +35,8 @@ def main():
 
     model = train_model(images, split_index, descriptions)
 
-    #test_images, test_labels = get_datasets(images[len(images) - 100:], descriptions)
-    test_images, test_labels = get_datasets(images[split_index:], descriptions)
+    #test_images, test_labels = get_datasets(images[len(images) - 100:], descriptions)  # TODO
+    test_images, test_labels = get_datasets(images[split_index:], descriptions)  # TODO
     print(f"Test set size: {len(test_images)}")
     model.evaluate(test_images, test_labels)
 
@@ -239,8 +239,8 @@ def load_descriptions():
     # with open(os.path.join(directory, "words.txt")) as file:
     #   extract_fields(descriptions, file, extract_words_fields)
 
-    # with open(os.path.join(directory, "sentences.txt")) as file:
-    #   extract_fields(descriptions, file, extract_sentences_fields)
+    with open(os.path.join(directory, "sentences.txt")) as file:
+        extract_fields(descriptions, file, extract_sentences_fields)
 
     return descriptions
 
