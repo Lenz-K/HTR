@@ -16,7 +16,7 @@ TARGET_HEIGHT = 32
 TARGET_SIZE = (TARGET_WIDTH, TARGET_HEIGHT)
 
 MAX_STRING_LENGTH = 62
-ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase + "!?.,;:-'\"&/()*#+|"
+ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!?.,;:-'\"&/()*#+|"
 NUM_CLASSES = len(ALPHABET) + 1  # + 1 for blank-symbol
 SEPARATOR_SYMBOL = len(ALPHABET)
 
