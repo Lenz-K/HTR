@@ -1,6 +1,5 @@
 import os
 import random
-import string
 
 import numpy as np
 import tensorflow as tf
@@ -21,22 +20,25 @@ NUM_CLASSES = len(ALPHABET) + 1  # + 1 for blank-symbol
 SEPARATOR_SYMBOL = len(ALPHABET)
 
 BATCH_SIZE = 64
-EPOCHS = 25  # TODO
-SPLIT_FACTOR = 0.99  # TODO
+EPOCHS = 1  # TODO
+SPLIT_FACTOR = 0.996  # TODO
 
 
 def main():
     # filename: [ok, width, height, label]
     descriptions = load_descriptions()
     images = load_image_names()
-    print(f"Number of loaded images: {len(images)}")
     np.random.shuffle(images)
+    print(f"Number of found images: {len(images)}")
+    images, labels = get_datasets(descriptions, images)  # TODO
+    print(f"Number of loaded images: {len(images)}")
     split_index = int(len(images) * SPLIT_FACTOR)
+    train_images, train_labels = images[:split_index], labels[:split_index]
 
-    model = train_model(images, split_index, descriptions)
+    model = train_model(train_images, train_labels)
 
-    #test_images, test_labels = get_datasets(images[len(images) - 100:], descriptions)  # TODO
-    test_images, test_labels = get_datasets(images[split_index:], descriptions)  # TODO
+    test_images, test_labels = images[split_index:], labels[split_index:]  # TODO
+    #test_images, test_labels = images[len(images)-12:], labels[len(images)-12:]  # TODO
     print(f"Test set size: {len(test_images)}")
     model.evaluate(test_images, test_labels)
 
@@ -61,8 +63,7 @@ def main():
         f.write(tflite_quantized_model)
 
 
-def train_model(images, split_index, descriptions):
-    training_images, training_labels = get_datasets(images[:split_index], descriptions)
+def train_model(training_images, training_labels):
     print(f"Training set size: {len(training_images)}")
     print(training_images[0])
     print(training_images[0].shape)
@@ -84,17 +85,29 @@ def train_model(images, split_index, descriptions):
     return model
 
 
-def get_datasets(images, descriptions):
-    labels = [descriptions[os.path.splitext(os.path.basename(image))[0]][3] for image in images]
+def get_datasets(descriptions, images):
+    """
+    Returns the filtered and loaded images with the corresponding labels.
+    """
+    labels = []
+    resulting_images = []
+    for image in images:
+        filename = os.path.splitext(os.path.basename(image))[0]
+        label = descriptions[filename][3]
+        if descriptions[filename][0] == "ok" and label not in labels:
+            labels.append(label)
+            resulting_images.append(load_image(image))
 
-    for i in range(len(images)):
-        images[i] = load_image(images[i])
-        labels[i] = text_to_label(labels[i])
+    for i, text in enumerate(labels):
+        labels[i] = text_to_label(text)
 
-    return np.asarray(images), np.asarray(labels)
+    return np.asarray(resulting_images), np.asarray(labels)
 
 
 def create_model():
+    """
+    Creates the TensorFlow model.
+    """
     kernel = (3, 3)
 
     input_data = layers.Input(name='the_input', shape=(TARGET_HEIGHT, TARGET_WIDTH), dtype='float32')
@@ -120,19 +133,9 @@ def create_model():
     inner = layers.Dense(512, name='dense4', activation=tf.nn.relu)(inner)
     inner = layers.Dense(512, name='dense42', activation=tf.nn.relu)(inner)
 
-    # inner = layers.Dropout(0.25)(inner)
-    # inner = layers.Flatten()(inner)
-
     outputs = layers.Dense(NUM_CLASSES, name='dense5', activation="softmax")(inner)
 
     model = keras.models.Model(inputs=input_data, outputs=outputs)
-
-    # print("inputs")
-    # [print(i.shape, i.dtype) for i in model.inputs]
-    # print("outputs")
-    # [print(o.shape, o.dtype) for o in model.outputs]
-    # print("layers")
-    # [print(l.name, l.input_shape, l.dtype) for l in model.layers]
 
     model.compile(optimizer='adam',
                   loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
@@ -144,6 +147,9 @@ def create_model():
 
 
 def predict_image(model, image):
+    """
+    Predicts what text is seen in an image and returns the text.
+    """
     image = np.expand_dims(image, axis=0)
     prediction = model.predict(image)
 
@@ -165,10 +171,11 @@ def predict_image(model, image):
 
 
 def text_to_label(text):
+    """
+    Converts text to a label. That is a list of the indices of the characters in the ALPHABET
+    """
     label = np.ones([MAX_STRING_LENGTH])
     label *= SEPARATOR_SYMBOL
-
-    # label = np.ones([len(text)])
 
     for i, c in enumerate(text[:MAX_STRING_LENGTH]):
         label[i] = ALPHABET.index(c)
@@ -177,6 +184,9 @@ def text_to_label(text):
 
 
 def label_to_text(label):
+    """
+    Converts a label to text.
+    """
     res = ""
 
     for c in label:
@@ -189,10 +199,17 @@ def label_to_text(label):
 
 
 def load_image(image_path):
+    """
+    Loads an image into a numpy float array.
+    """
     image = Image.open(image_path)
     image.thumbnail(TARGET_SIZE)
     image_array = np.asarray(image)
     image_array = image_array / 255.0
+    image_array_2 = image_array * 2
+    image_array = np.where(image_array > 0.5, image_array_2, image_array)
+    image_array = np.where(image_array > 1.0, 1.0, image_array)
+
     image_width = len(image_array[0])
     image_height = len(image_array)
 
@@ -204,15 +221,14 @@ def load_image(image_path):
     width_padding = (width_padding_index, padding_width - width_padding_index)
 
     image_array = np.pad(image_array, (height_padding, width_padding), mode="constant", constant_values=(1.0, 1.0))
-    # image_array -= 0.5
-    # print(image_array.shape)
-
-    # print(sys.getsizeof(image_array.astype('float32')))
 
     return image_array.astype('float32')
 
 
 def load_image_names():
+    """
+    Collects al image paths
+    """
     images = []
     directory = ROOT_DIR + "/images"
     add_all_pngs(images, directory)
@@ -220,6 +236,9 @@ def load_image_names():
 
 
 def add_all_pngs(images, directory):
+    """
+    Recursive function to collect all png images in a root folder with all subfolders.
+    """
     files = os.listdir(directory)
     for file in files:
         filepath = os.path.join(directory, file)
@@ -230,6 +249,9 @@ def add_all_pngs(images, directory):
 
 
 def load_descriptions():
+    """
+    Create a dictionary with all descriptions of the images
+    """
     descriptions = {}
     directory = ROOT_DIR + "/descriptions"
 
@@ -246,6 +268,9 @@ def load_descriptions():
 
 
 def extract_fields(descriptions, file, extract_method):
+    """
+    Extract all descriptions in the description files.
+    """
     while True:
         line = file.readline()
         if not line:
@@ -255,18 +280,27 @@ def extract_fields(descriptions, file, extract_method):
 
 
 def extract_lines_fields(descriptions, line):
+    """
+    Extract the fields of a line in the description file lines.txt
+    """
     fields = line.split(maxsplit=8)
     label = fields[-1][:-1].replace(" ", "|")
     descriptions[fields[0]] = [fields[1], fields[-3], fields[-2], label]
 
 
 def extract_words_fields(descriptions, line):
+    """
+    Extract the fields of a line in the description file words.txt
+    """
     fields = line.split(maxsplit=8)
     label = fields[-1][:-1].replace(" ", "|")
     descriptions[fields[0]] = [fields[1], fields[-4], fields[-3], label]
 
 
 def extract_sentences_fields(descriptions, line):
+    """
+    Extract the fields of a line in the description file sentences.txt
+    """
     fields = line.split(maxsplit=9)
     label = fields[-1][:-1].replace(" ", "|")
     descriptions[fields[0]] = [fields[2], fields[-3], fields[-2], label]
