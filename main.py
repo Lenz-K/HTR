@@ -20,7 +20,7 @@ NUM_CLASSES = len(ALPHABET) + 1  # + 1 for blank-symbol
 SEPARATOR_SYMBOL = len(ALPHABET)
 
 BATCH_SIZE = 64
-EPOCHS = 1  # TODO
+EPOCHS = 64  # TODO
 SPLIT_FACTOR = 0.996  # TODO
 
 
@@ -207,7 +207,7 @@ def load_image(image_path):
     image_array = np.asarray(image)
     image_array = image_array / 255.0
     image_array_2 = image_array * 2
-    image_array = np.where(image_array > 0.5, image_array_2, image_array)
+    image_array = np.where(image_array >= 0.6, image_array_2, image_array)
     image_array = np.where(image_array > 1.0, 1.0, image_array)
 
     image_width = len(image_array[0])
